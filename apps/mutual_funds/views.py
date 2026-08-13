@@ -1,6 +1,7 @@
 from datetime import datetime
 
-from django.db.models import Q
+from django.db.models import Prefetch
+from django.db.models.fields.json import KT
 
 from rest_framework import status
 from rest_framework.response import Response
@@ -12,10 +13,8 @@ from apps.mutual_funds.models import (
 )
 
 from .serializers import (
-    FundHouseSerializer,
     MutualFundSchemeListSerializer,
     MutualFundSchemeDetailSerializer,
-    NAVHistorySerializer,
 )
 
 
@@ -35,29 +34,43 @@ def get_scheme_by_identifier(identifier):
 
         122612
         INF579M01183
-
-    Only one identifier is required.
     """
 
     identifier = str(identifier).strip()
 
-    return (
+    queryset = (
         MutualFundScheme.objects
         .select_related("fund_house")
-        .filter(
-            Q(scheme_code=identifier)
-            | Q(isin_growth__iexact=identifier)
-        )
-        .first()
     )
+
+    if identifier.isdigit():
+        return queryset.filter(
+            scheme_code=identifier
+        ).first()
+
+    return queryset.filter(
+        isin_growth__iexact=identifier
+    ).first()
+
+
+def get_nav_data(scheme):
+    """
+    Return NAV history stored in the MutualFundScheme.data JSON field.
+
+    Always returns a list.
+    """
+
+    data = scheme.data
+
+    if not isinstance(data, list):
+        return []
+
+    return data
 
 
 def build_scheme_data(scheme):
     """
     Common scheme response structure.
-
-    This function is reused by APIs so we do not repeat
-    the same scheme fields everywhere.
     """
 
     return {
@@ -75,40 +88,33 @@ def build_scheme_data(scheme):
 
 def get_latest_nav_history_entry(scheme):
     """
-    Return the latest NAV entry from nav_history.
+    Return latest NAV from the data JSON field.
 
-    Example return:
+    This helper is used by endpoints where the complete
+    data field is already loaded.
 
-        {
-            "nav": "24.2752",
-            "date": "11-08-2026"
-        }
-
-    Returns None if no NAV history exists.
+    Assumes data is stored newest -> oldest.
     """
 
-    history = scheme.nav_history or []
+    history = get_nav_data(scheme)
 
-    valid_entries = [
-        entry
-        for entry in history
-        if (
-            isinstance(entry, dict)
-            and entry.get("date")
-            and entry.get("nav") is not None
-        )
-    ]
-
-    if not valid_entries:
+    if not history:
         return None
 
-    return max(
-        valid_entries,
-        key=lambda entry: datetime.strptime(
-            entry["date"],
-            "%d-%m-%Y",
-        ),
-    )
+    for entry in history:
+
+        if not isinstance(entry, dict):
+            continue
+
+        nav = entry.get("nav")
+        date_string = entry.get("date")
+
+        if nav is None or not date_string:
+            continue
+
+        return entry
+
+    return None
 
 
 # =============================================================================
@@ -122,51 +128,118 @@ class FundHouseListAPIView(APIView):
 
     Returns all active fund houses with their active schemes.
 
-    Each scheme also contains its latest NAV:
+    Each scheme contains:
 
-        "latest_nav": "24.2752",
-        "latest_nav_date": "11-08-2026"
+        latest_nav
+        latest_nav_date
+
+    PERFORMANCE OPTIMIZATION:
+
+    The complete `data` JSON field is NOT loaded into Python.
+
+    PostgreSQL extracts:
+
+        data[0].nav
+        data[0].date
+
+    directly from the database.
+
+    This is important because `data` contains the complete
+    historical NAV history.
     """
 
     def get(self, request):
 
+        # ---------------------------------------------------------------------
+        # ACTIVE SCHEMES
+        #
+        # IMPORTANT:
+        #
+        # We annotate only the first NAV record.
+        #
+        # We also defer `data` so Django does NOT transfer the
+        # complete historical JSON from PostgreSQL.
+        # ---------------------------------------------------------------------
+
+        active_scheme_queryset = (
+            MutualFundScheme.objects
+            .filter(is_active=True)
+            .select_related("fund_house")
+            .annotate(
+                latest_nav_from_data=KT(
+                    "data__0__nav"
+                ),
+                latest_nav_date_from_data=KT(
+                    "data__0__date"
+                ),
+            )
+            .defer("data")
+            .order_by("scheme_code")
+        )
+
+        # ---------------------------------------------------------------------
+        # FUND HOUSES
+        # ---------------------------------------------------------------------
+
         fund_houses = (
             FundHouse.objects
             .filter(is_active=True)
-            .prefetch_related("schemes")
+            .prefetch_related(
+                Prefetch(
+                    "schemes",
+                    queryset=active_scheme_queryset,
+                    to_attr="active_schemes",
+                )
+            )
             .order_by("name")
         )
 
         response_data = []
 
-        for fund_house in fund_houses:
+        # ---------------------------------------------------------------------
+        # BUILD RESPONSE
+        # ---------------------------------------------------------------------
 
-            active_schemes = [
-                scheme
-                for scheme in fund_house.schemes.all()
-                if scheme.is_active
-            ]
+        for fund_house in fund_houses:
 
             scheme_list = []
 
-            for scheme in active_schemes:
+            for scheme in fund_house.active_schemes:
 
                 scheme_data = build_scheme_data(
                     scheme
                 )
 
-                latest_nav = get_latest_nav_history_entry(
-                    scheme
+                # -------------------------------------------------------------
+                # LATEST NAV
+                #
+                # IMPORTANT:
+                #
+                # Do NOT access scheme.data here.
+                #
+                # The values were already extracted by PostgreSQL.
+                # -------------------------------------------------------------
+
+                latest_nav = getattr(
+                    scheme,
+                    "latest_nav_from_data",
+                    None,
                 )
 
-                if latest_nav:
+                latest_nav_date = getattr(
+                    scheme,
+                    "latest_nav_date_from_data",
+                    None,
+                )
 
-                    scheme_data["latest_nav"] = (
-                        latest_nav["nav"]
+                if latest_nav is not None:
+
+                    scheme_data["latest_nav"] = str(
+                        latest_nav
                     )
 
                     scheme_data["latest_nav_date"] = (
-                        latest_nav["date"]
+                        latest_nav_date
                     )
 
                 else:
@@ -214,6 +287,7 @@ class MutualFundSchemeListAPIView(APIView):
             MutualFundScheme.objects
             .filter(is_active=True)
             .select_related("fund_house")
+            .defer("data")
             .order_by("scheme_code")
         )
 
@@ -289,17 +363,9 @@ class MutualFundNAVHistoryAPIView(APIView):
     """
     GET /api/mutual-funds/schemes/<scheme_identifier>/nav-history/
 
-    <scheme_identifier> can be:
+    Returns complete NAV history stored in:
 
-        Scheme code:
-            122612
-
-        OR
-
-        ISIN:
-            INF579M01183
-
-    Returns complete NAV history.
+        MutualFundScheme.data
     """
 
     def get(
@@ -324,13 +390,13 @@ class MutualFundNAVHistoryAPIView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        data = build_scheme_data(
+        response_data = build_scheme_data(
             scheme
         )
 
         history = []
 
-        for entry in scheme.nav_history or []:
+        for entry in get_nav_data(scheme):
 
             if not isinstance(entry, dict):
                 continue
@@ -363,13 +429,24 @@ class MutualFundNAVHistoryAPIView(APIView):
                 )
             )
 
-        except ValueError:
+        except (ValueError, TypeError):
+
             pass
 
-        data["nav_history"] = history
+        # ---------------------------------------------------------------------
+        # DATABASE FIELD:
+        #
+        #     data
+        #
+        # API RESPONSE:
+        #
+        #     data
+        # ---------------------------------------------------------------------
+
+        response_data["data"] = history
 
         return Response(
-            data,
+            response_data,
             status=status.HTTP_200_OK,
         )
 
@@ -383,13 +460,17 @@ class MutualFundNAVHistoryDateAPIView(APIView):
     """
     GET /api/mutual-funds/schemes/<scheme_identifier>/nav-history/<nav_date>/
 
-    Example using scheme code:
+    Example:
 
         /api/mutual-funds/schemes/122612/nav-history/2026-08-11/
 
-    Example using ISIN:
+    API date format:
 
-        /api/mutual-funds/schemes/INF579M01183/nav-history/2026-08-11/
+        YYYY-MM-DD
+
+    Database JSON date format:
+
+        DD-MM-YYYY
     """
 
     def get(
@@ -443,7 +524,7 @@ class MutualFundNAVHistoryDateAPIView(APIView):
             )
 
         # =====================================================================
-        # DATE STORED IN JSON
+        # CONVERT DATE
         # =====================================================================
 
         stored_date = requested_date.strftime(
@@ -452,21 +533,29 @@ class MutualFundNAVHistoryDateAPIView(APIView):
 
         nav_record = None
 
-        for entry in scheme.nav_history or []:
+        # =====================================================================
+        # FIND NAV IN `data`
+        # =====================================================================
+
+        for entry in get_nav_data(scheme):
 
             if not isinstance(entry, dict):
                 continue
 
-            if entry.get("date") == stored_date:
+            if entry.get("date") != stored_date:
+                continue
 
-                nav_record = {
-                    "nav": str(
-                        entry.get("nav")
-                    ),
-                    "date": entry.get("date"),
-                }
+            if entry.get("nav") is None:
+                continue
 
-                break
+            nav_record = {
+                "nav": str(
+                    entry["nav"]
+                ),
+                "date": entry["date"],
+            }
+
+            break
 
         # =====================================================================
         # NAV NOT FOUND
@@ -489,16 +578,16 @@ class MutualFundNAVHistoryDateAPIView(APIView):
         # RESPONSE
         # =====================================================================
 
-        data = build_scheme_data(
+        response_data = build_scheme_data(
             scheme
         )
 
-        data["nav_history"] = [
+        response_data["data"] = [
             nav_record
         ]
 
         return Response(
-            data,
+            response_data,
             status=status.HTTP_200_OK,
         )
 
@@ -523,8 +612,15 @@ class FundHouseSchemesAPIView(APIView):
 
         try:
 
-            fund_house = FundHouse.objects.get(
-                id=fund_house_id
+            fund_house = (
+                FundHouse.objects
+                .only(
+                    "id",
+                    "name",
+                )
+                .get(
+                    id=fund_house_id
+                )
             )
 
         except FundHouse.DoesNotExist:
@@ -542,10 +638,11 @@ class FundHouseSchemesAPIView(APIView):
         schemes = (
             MutualFundScheme.objects
             .filter(
-                fund_house=fund_house,
+                fund_house_id=fund_house_id,
                 is_active=True,
             )
             .select_related("fund_house")
+            .defer("data")
             .order_by("scheme_code")
         )
 

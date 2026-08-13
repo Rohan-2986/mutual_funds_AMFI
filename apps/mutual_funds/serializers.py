@@ -40,9 +40,9 @@ class MutualFundSchemeListSerializer(
 
     Returns basic scheme information.
 
-    NAV history is intentionally not included here because
-    returning the complete history for every scheme would
-    make the response unnecessarily large.
+    Complete NAV data is intentionally not included here
+    because returning the complete history for every scheme
+    would make the response unnecessarily large.
     """
 
     fund_house = serializers.CharField(
@@ -80,7 +80,7 @@ class MutualFundSchemeDetailSerializer(
 
     Returns complete scheme information.
 
-    NAV history is not included in this endpoint.
+    NAV data is not included in this endpoint.
     """
 
     fund_house = serializers.CharField(
@@ -105,7 +105,7 @@ class MutualFundSchemeDetailSerializer(
 
 
 # ============================================================
-# NAV HISTORY SERIALIZER
+# NAV HISTORY / DATA SERIALIZER
 # ============================================================
 
 class NAVHistorySerializer(
@@ -117,7 +117,7 @@ class NAVHistorySerializer(
         GET /api/mutual-funds/schemes/<scheme_code>/nav-history/
 
     Returns complete scheme information plus the complete
-    NAV history stored inside the JSONField.
+    NAV data stored inside the JSONField named `data`.
     """
 
     fund_house = serializers.CharField(
@@ -125,7 +125,7 @@ class NAVHistorySerializer(
         read_only=True,
     )
 
-    nav_history = serializers.SerializerMethodField()
+    data = serializers.SerializerMethodField()
 
     class Meta:
         model = MutualFundScheme
@@ -140,12 +140,12 @@ class NAVHistorySerializer(
             "isin_div_payout",
             "isin_div_reinvestment",
             "is_active",
-            "nav_history",
+            "data",
         ]
 
-    def get_nav_history(self, obj):
+    def get_data(self, obj):
         """
-        Return NAV history exactly as stored in the database.
+        Return NAV data exactly as stored in the database.
 
         Expected structure:
 
@@ -157,12 +157,12 @@ class NAVHistorySerializer(
         ]
         """
 
-        history = obj.nav_history
+        data = obj.data
 
-        if not history:
+        if not data:
             return []
 
-        return history
+        return data
 
 
 # ============================================================

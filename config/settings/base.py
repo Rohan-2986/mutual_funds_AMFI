@@ -192,8 +192,8 @@ CELERY_BEAT_SCHEDULE = {
     "sync-amfi-nav-late-morning": {
         "task": "apps.mutual_funds.tasks.sync_daily_nav",
         "schedule": crontab(
-            hour=12,
-            minute=5,
+            hour=11,
+            minute=0,
         ),
     },
 

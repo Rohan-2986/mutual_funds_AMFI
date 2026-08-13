@@ -98,9 +98,9 @@ class MutualFundSchemeAdmin(admin.ModelAdmin):
     )
     def latest_nav(self, obj):
         """
-        Return the latest NAV from nav_history.
+        Return the latest NAV from data.
 
-        nav_history structure:
+        data structure:
 
         [
             {
@@ -118,7 +118,7 @@ class MutualFundSchemeAdmin(admin.ModelAdmin):
             24.2752
         """
 
-        history = obj.nav_history or []
+        history = obj.data or []
 
         if not isinstance(history, list):
             return "-"
@@ -178,7 +178,7 @@ class MutualFundSchemeAdmin(admin.ModelAdmin):
             11-08-2026
         """
 
-        history = obj.nav_history or []
+        history = obj.data or []
 
         if not isinstance(history, list):
             return "-"
