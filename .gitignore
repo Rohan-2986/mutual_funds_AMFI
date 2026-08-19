@@ -6,39 +6,60 @@ __pycache__/
 *$py.class
 
 # ============================================================
-# Virtual Environment
+# Virtual environments
 # ============================================================
 .venv/
 venv/
 env/
 ENV/
+.venv-*/
+venv-*/
+venv-wsl/
 
 # ============================================================
-# Django / Runtime
+# Django
 # ============================================================
 *.log
+db.sqlite3
+db.sqlite3-journal
 
 # ============================================================
-# Environment / Secrets
+# Environment variables / secrets
 # ============================================================
 .env
 .env.*
+!.env.example
 
 # ============================================================
-# Celery Beat Runtime Files
+# Celery
 # ============================================================
 celerybeat-schedule
-celerybeat-schedule-shm
-celerybeat-schedule-wal
+celerybeat-schedule-*
+**/celerybeat-schedule
+**/celerybeat-schedule-*
+
+# ============================================================
+# AMFI downloaded/raw data
+# ============================================================
+amfi_raw_data.txt
+**/amfi_raw_data.txt
 
 # ============================================================
 # IDE
 # ============================================================
-.vscode/
 .idea/
+.vscode/
 
 # ============================================================
 # OS
 # ============================================================
 .DS_Store
 Thumbs.db
+
+# ============================================================
+# Angular
+# ============================================================
+frontend/amfi-frontend/node_modules/
+frontend/amfi-frontend/.angular/
+frontend/amfi-frontend/dist/
+frontend/amfi-frontend/.cache/
