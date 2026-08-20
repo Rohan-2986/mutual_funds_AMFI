@@ -55,11 +55,3 @@ amfi_raw_data.txt
 # ============================================================
 .DS_Store
 Thumbs.db
-
-# ============================================================
-# Angular
-# ============================================================
-frontend/amfi-frontend/node_modules/
-frontend/amfi-frontend/.angular/
-frontend/amfi-frontend/dist/
-frontend/amfi-frontend/.cache/
